@@ -40,10 +40,8 @@ esp32:
     type: arduino
 
 external_components:
-  - source:
-      type: local
-      path: components      # points to /config/esphome/components/
-    components: [esphome_persistent_tcp]
+  source: github://0n3man/esphome_persistent_tcp
+  components: [esphome_persistent_tcp]
 
 globals:
   - id: last_command
