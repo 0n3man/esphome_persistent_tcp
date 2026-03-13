@@ -1,0 +1,5 @@
+{
+  "name": "esphome_persistent_tcp",
+  "description": "ESPHome Persistent TCP client component",
+  "version": "1.0.0"
+}
