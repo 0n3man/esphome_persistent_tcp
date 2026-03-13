@@ -1,0 +1,331 @@
+# This file includes extra stuff that displays time and furnance status on a small screen.
+# The on_boot lambda code is how you can process data coming back from the server on the TCP socket.
+# Then down in remote_receiver section, the id(tcp_client).send_message(...) commands are examples of data being sent to server.
+
+esphome:
+  name: fr-clock
+  friendly_name: FR Clock
+  platformio_options:
+    lib_deps:
+      - Networking 
+      - ESP32Async/AsyncTCP
+    build_flags:
+      - -DCONFIG_ASYNC_TCP_USE_WDT=0
+      - -DASYNC_TCP_DEBUG=0
+      - -DCORE_DEBUG_LEVEL=0
+
+  on_boot:
+    priority: -100  # runs after all components including wifi
+    then:
+      - lambda: |-
+          id(tcp_client).on_message([](const std::string& msg) {
+            ESP_LOGI("tcp_rx", "YAML got: %s", msg.c_str());
+
+            // Example: react to specific responses from MythTV
+            if (msg.find("# OK") != std::string::npos) {
+              ESP_LOGI("tcp_rx", "Command accepted");
+            }
+            else if (msg.find("uptime") != std::string::npos) {
+              ESP_LOGI("tcp_rx", "Got uptime response");
+            }
+            // Add whatever parsing you need here
+            // You have full access to all ESPHome IDs:
+            // id(inside_temperature), id(esptime), etc.
+          });
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+#    type: esp-idf
+    type: arduino
+
+external_components:
+  - source:
+      type: local
+      path: components      # points to /config/esphome/components/
+    components: [esphome_persistent_tcp]
+
+globals:
+  - id: last_command
+    type: int
+    initial_value: '-1'
+  - id: last_command_time
+    type: uint32_t
+    initial_value: '0'
+  - id: digitsSent
+    type: int
+    initial_value: '0'
+  - id: play_speed
+    type: int
+    initial_value: '1'
+
+esphome_persistent_tcp:
+  id: tcp_client
+  host: "192.168.10.3"
+  port: 6546
+
+# Enable logging
+logger:
+  level: INFO
+  logs:
+    async_tcp: NONE
+    AsyncTCP: NONE
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  platform: esphome
+  password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Optional manual IP
+  manual_ip:
+    static_ip: 192.168.100.125
+    gateway: 192.168.100.2
+    subnet: 255.255.255.0
+    dns1: 192.168.100.2
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "FR-Clock"
+    password: !secret wifi_password
+
+# Enable Web server.
+web_server:
+  port: 80
+  
+captive_portal:
+
+time:
+  - platform: sntp
+    update_interval: 1min
+    id: esptime
+#    timezone: America/New_York
+    servers:
+      - 192.168.10.2
+#     - 0.pool.ntp.org
+#     - 1.pool.ntp.org
+#     - 2.pool.ntp.org
+
+text_sensor:
+  - platform: template
+    name: "Current Time"
+    id: current_time
+    update_interval: 10s
+
+    lambda: |-
+          return  id(esptime).now().strftime("%H%M");
+
+sensor:
+  - platform: uptime
+    name: Uptime Sensor
+    id: time_since_boot
+    update_interval: 30s
+
+  - platform: homeassistant
+    id: inside_temperature
+#    entity_id: sensor.waterfurnace_zone_1_ambient_temperature
+    entity_id: sensor.kit_temperature_aq
+    internal: true
+
+  - platform: homeassistant
+    id: target_heat
+#    entity_id: sensor.waterfurnace_zone_1_heating_target_temperature
+    entity_id: sensor.geothermal_heat_pump_heating_setpoint
+    internal: true
+
+  - platform: homeassistant
+    id: target_air
+#    entity_id: sensor.waterfurnace_zone_1_cooling_target_temperature
+    entity_id: sensor.geothermal_heat_pump_cooling_setpoint
+    internal: true
+
+
+font:
+  - file: "gfonts://Silkscreen"
+    id: small
+    size: 15
+  - file: "gfonts://Roboto"
+    id: large
+    size: 40
+  - file: "gfonts://Silkscreen"
+    id: medium
+    size: 24
+
+
+i2c:
+  sda: GPIO13
+  scl: GPIO15
+  scan: false
+  # manually setting the frequency to a higher rate may avoid long component updates
+  # frequency: 300kHz
+
+display:
+  - platform: ssd1306_i2c
+    #model: "SH1106 128x64"
+    model: "SSD1306 128x64"
+    # I'm not sure this contrast has any impact
+    contrast: 10%
+    #reset_pin: GPIOXX
+    address: 0x3C
+    lambda: |-
+      //it.printf(0, 0, id(small), TextAlign::TOP_LEFT, "Time and");
+      //it.printf(0, 12, id(small), TextAlign::TOP_LEFT, "Temperature");
+
+      // Print time in HH:MM format
+      //it.strftime(0, 60, id(large), TextAlign::BASELINE_LEFT, "%H:%M", id(esptime).now());
+      //it.strftime(0, 6, id(large), TextAlign::TOP_LEFT, "%H:%M", id(esptime).now());
+      it.strftime(0, 0, id(large), TextAlign::TOP_LEFT, "%I:%M", id(esptime).now());
+
+      // Print inside temperature (from homeassistant sensor)
+      //if (id(inside_temperature).has_state()) {
+      it.printf(0, 36, id(medium), TextAlign::TOP_LEFT , "%.1f", id(inside_temperature).state);
+      //}
+
+      auto time = id(esptime).now();
+      if ((time.month) >= 10 || (time.month) <= 5)
+      {
+        it.printf(80, 36, id(medium), TextAlign::TOP_LEFT , "%.0f", id(target_heat).state);
+        //it.printf(80, 36, id(medium), TextAlign::TOP_LEFT , "%d", time.month);
+      }
+      else
+      {
+        it.printf(80, 36, id(medium), TextAlign::TOP_LEFT , "%.0f", id(target_air).state);
+      }
+
+
+
+remote_receiver:
+  pin: GPIO43
+#  dump: rc5
+  carrier_duty_percent: 50%
+  on_rc5:
+    then:  
+      - lambda: |-
+          uint32_t now = millis();
+          if (x.command == id(last_command) && (now - id(last_command_time)) < 500) {
+            return;  // ignore duplicate within 500ms
+          }
+          id(last_command) = x.command;
+          id(last_command_time) = now;
+
+          ESP_LOGI("remote", "RC5 address=%d command=%d", x.address, x.command);
+
+          char key[10];
+          snprintf(key, sizeof(key), "%d", x.command);
+          char msg[50];
+
+          if (x.command >= 0 && x.command <= 9) {  // number keys
+            snprintf(msg, sizeof(msg), "key %s\n", key);
+            id(tcp_client).send_message(msg);
+            id(digitsSent) = 1;
+          } else if (x.command == 10) {  // clear key send a period
+            //snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message("key .\n");
+          } else if (x.command == 11) {  // red
+            id(tcp_client).send_message("jump playbackrecordings\n");
+          } else if (x.command == 12) {  // *My Radio !!!
+            snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message(msg);
+          } else if (x.command == 13) {  // menu !!! only sending key like in playback mode
+            // snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message("key I\n");
+          } else if (x.command == 14) {  // *# & Closed Caption !!!
+            snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message(msg);
+          } else if (x.command == 20) {  // up
+            //snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message("key up\n");
+          } else if (x.command == 21) {  // down
+            //snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message("key down\n");
+          } else if (x.command == 22) {  // left
+            //snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message("key left\n");
+          } else if (x.command == 23) {  // right
+            //snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message("key right\n");
+          } else if (x.command == 24) {  // *My Video !!!
+            snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message(msg);
+          } else if (x.command == 25) {  // *My Music !!!
+            snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message(msg);
+          } else if (x.command == 26) {  // *My Picture !!!
+            snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message(msg);
+          } else if (x.command == 27) {  // guide
+            //snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message("key S\n");
+          } else if (x.command == 28) {  // *mythtv
+            //snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message("livetv\n");
+          } else if (x.command == 30) {  // skip
+            //snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message("play seek forward\n");
+          } else if (x.command == 31) {  // exit
+            //snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message("key escape\n");
+          } else if (x.command == 32) {  // chan up
+            //snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message("play channel up\n");
+          } else if (x.command == 33) {  // chan down
+            //snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message("play channel down\n");
+          } else if (x.command == 36) {  // replay
+            //snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message("play seek backward\n");
+          } else if (x.command == 37) {  // ok
+            snprintf(msg, sizeof(msg), "skey %s\n", key);
+            if (id(digitsSent) == 1)
+            {
+              id(digitsSent) = 0;
+              id(tcp_client).send_message("key .\n");
+              id(tcp_client).send_message("key 1\n");
+            }
+            id(tcp_client).send_message("key return\n");
+          } else if (x.command == 41) {  // blue
+            //snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message("key W\n");
+          } else if (x.command == 46) {  // green
+            //snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message("key M\n");
+          } else if (x.command == 48) {  // pause
+            //snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message("play speed pause\n");
+          } else if (x.command == 50) {  // rewind
+            //snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message("play speed 1/2x\n");
+          } else if (x.command == 52) {  // fast forward
+            id(play_speed) += 1;
+            snprintf(msg, sizeof(msg), "play speed %dx\n", id(play_speed)&0xF);
+            id(tcp_client).send_message(msg);
+          } else if (x.command == 53) {  // play
+            //snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message("play speed 1x\n");
+            id(play_speed) = 1;
+          } else if (x.command == 54) {  // stop
+            //snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message("key escape\n");
+          } else if (x.command == 55) {  // record
+            //snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message("key R\n");
+          } else if (x.command == 56) {  // yellow
+            //snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message("key A\n");
+          } else if (x.command == 59) {  // *Go
+            //snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message("jump mainmenu\n");
+          } else if (x.command == 61) {  // *power
+            snprintf(msg, sizeof(msg), "skey %s\n", key);
+            id(tcp_client).send_message(msg);
+          }
+          //id(last_command_time) = millis();
+
+
